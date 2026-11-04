@@ -17,6 +17,11 @@ test("counts decisions separately from requests and recommendations", () => {
 	assert.match(history([route, monitor], 1), /jev-monitor/);
 	assert.doesNotMatch(history([route, monitor], 1), /jev-route/);
 });
+test("turn selections are not presented as legacy fork recommendations", () => {
+ const text = summarize([{ ...monitor, data: { ...monitor.data, routingPolicy: "turn-routing-v1" } }]);
+ assert.match(text, /turn selection \(pending auth\): codex\/astra/);
+ assert.match(text, /switch-applied/);
+});
 test("legacy history and empty summary", () => {
 	assert.match(history([{ ...route, data: { target: "old" } }], 10), /Legacy record/);
 	assert.match(summarize([]), /0 routing decisions/);

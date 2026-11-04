@@ -2,7 +2,7 @@
   "name": "pi-jev-router-openrouter",
   "version": "0.5.0-openrouter.2",
   "private": true,
-  "description": "GPT Auto: session-pinned Sol/Astra routing using Jev on OpenRouter",
+  "description": "GPT Auto: turn-scoped Sol/Astra routing using Jev on OpenRouter",
   "license": "MIT",
   "author": "MejiasDev",
   "repository": {
@@ -27,7 +27,7 @@
     ]
   },
   "scripts": {
-    "test": "node --experimental-strip-types --test telemetry.test.ts && node fast-mode.test.mjs"
+    "test": "node --experimental-strip-types --test telemetry.test.ts && node fast-mode.test.mjs && node turn-routing.test.mjs"
   },
   "files": [
     "fast-mode.ts",

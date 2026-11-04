@@ -15,13 +15,13 @@ export function summarize(entries: readonly DecisionEntry[]) {
 	const number = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 	for (const row of rows) {
 		const d = row.data as RecordData;
-		const key = `${row.customType === "jev-monitor" ? "monitor recommendation" : "initial selection"}: ${d.target} (${d.thinking})`;
+		const key = `${row.customType === "jev-monitor" ? d.routingPolicy === "turn-routing-v1" ? "turn selection (pending auth)" : "monitor recommendation" : "initial selection"}: ${d.target} (${d.thinking})`;
 		counts.set(key, (counts.get(key) ?? 0) + 1);
 		requests += number(d.evaluationRequests); input += number(d.inputTokens); output += number(d.outputTokens); cost += number(d.estimatedCost);
 		if (d.source === "fallback") fallbacks++;
 		if (d.usageIncomplete || d.evaluationRequests === undefined) incomplete++;
 	}
-	return `${rows.length} routing decisions (${rows.filter((e) => e.customType === "jev-route").length} initial, ${rows.filter((e) => e.customType === "jev-monitor").length} monitoring)\n${requests} classifier requests, ${fallbacks} fallbacks; ${input} input / ${output} output tokens; estimated Jev $${cost.toFixed(6)}${incomplete ? `; ${incomplete} records with incomplete/legacy usage` : ""}\n${[...counts].sort(([a], [b]) => a.localeCompare(b)).map(([key, n]) => `${n} × ${key}`).join("\n")}\nMonitoring recommendations do not switch the pinned model. Counts are decisions, not generation requests. Costs exclude skill/adaptive evaluations and may omit failed-call usage.`;
+	return `${rows.length} routing decisions (${rows.filter((e) => e.customType === "jev-route").length} initial, ${rows.filter((e) => e.customType === "jev-monitor").length} monitoring)\n${requests} classifier requests, ${fallbacks} fallbacks; ${input} input / ${output} output tokens; estimated Jev $${cost.toFixed(6)}${incomplete ? `; ${incomplete} records with incomplete/legacy usage` : ""}\n${[...counts].sort(([a], [b]) => a.localeCompare(b)).map(([key, n]) => `${n} × ${key}`).join("\n")}\nLegacy monitoring only recommends forks; turn-routing-v1 decisions can switch after authentication. Inspect jev-pin outcome=switch-applied for committed transitions. Counts are decisions, not generation requests. Costs exclude skill/adaptive evaluations and may omit failed-call usage.`;
 }
 
 export function history(entries: readonly DecisionEntry[], limit: number) {

@@ -2,7 +2,7 @@
 
 A fork of [pi-jev-router](https://github.com/mejiasd3v/pi-jev-router), based on upstream **0.5.0**, commit `b068a9b1102939d42114eec6b62ee1308a5364d8`.
 
-The **gpt-auto** profile uses Jev on OpenRouter to select a Codex model and reasoning effort once per session. The chosen model stays pinned. Monitoring can suggest a fork, but never switches models automatically.
+The **gpt-auto** profile uses Jev on OpenRouter to select a Codex model and reasoning effort for each new user turn. The selected model stays stable through tool continuations. Later turns can automatically switch between Sol and Astra.
 
 ## Install on any machine
 
@@ -43,7 +43,7 @@ Jev itself is pinned to the versioned classifier **`openrouter/typesafe/jev-1.14
 
 A global `jevRouter` object in `~/.pi/agent/settings.json` overrides the bundled profile **in full**. Remove that object to use the shared defaults; do not remove unrelated settings. Project settings cannot override routing. `PI_CODING_AGENT_DIR` is respected. `/jev` shows the configuration source.
 
-Changing model/initial-effort settings does not rewrite existing session pins. Use `/new` or `/fork` for a fresh choice. Pins survive reload/resume and compaction. If classification fails initially, Astra is selected at its highest supported automatic effort. Monitoring failures retain the current pin.
+Use `/reload` to activate code or configuration changes. Model choices are reassessed on the next user turn; committed routes survive reload/resume. If classification fails initially, Astra is selected at its highest supported automatic effort. Later classification failures retain the current route. Disabling monitoring retains session-pinned behaviour.
 
 ## What changed from upstream
 
@@ -68,7 +68,7 @@ Routing requests have a conservative 28,000-byte budget; long inputs may be chun
 
 Telemetry is automatic; no commands are needed. Ask the coding assistant to inspect custom entries in local Pi session JSONL logs. `telemetry.ts` provides offline readers and summaries.
 
-New `jev-route` and `jev-monitor` custom session entries include a decision UUID, timestamp, policy snapshot/hash, eligible model/effort profiles, classifier identity, final choice and probabilities, per-request outcomes/usage/latency (including retries and chunk evaluations), prior pin, and monitoring outcome. Existing `jev-pin` records confirm the initial selection after authentication. Initial decisions are marked pending authentication; monitoring records distinguish a recommendation from the unchanged pin. These are decisions, not counts of generation calls. Reused pins do not trigger additional decisions.
+New `jev-route` and `jev-monitor` custom session entries include a decision UUID, timestamp, policy snapshot/hash, eligible model/effort profiles, classifier identity, final choice and probabilities, per-request outcomes/usage/latency (including retries and chunk evaluations), prior pin, and monitoring outcome. `jev-pin` records confirm selections and transitions after authentication. Initial decisions are marked pending authentication; monitoring records distinguish a pending switch from a retained route; `jev-pin` records with `outcome: switch-applied` confirm committed changes. These are decisions, not counts of generation calls. Reused pins do not trigger additional decisions.
 
 Jev is a classifier, not an explanation generator: its probabilities and the exact offered routing rubrics are evidence, not a prose rationale or calibrated confidence. The saved reason describes the policy or a sanitized fallback cause. No additional classifier requests are made for observability. Records do not add prompt excerpts, tool output or raw provider errors. They live in Pi's existing session JSONL files and survive reload/resume; retention follows those files. Older decisions cannot recover evidence that was never saved. Skill/adaptive-effort evaluations remain outside these routing totals. Failed calls can be billed without reported usage, so costs are estimates.
 
