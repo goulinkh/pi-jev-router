@@ -14,11 +14,11 @@ import {
 	type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { getAgentDir, stripFrontmatter, type ContextEvent, type ExtensionAPI, type ExtensionContext, type Skill } from "@earendil-works/pi-coding-agent";
-import { createGateway, experimental_evaluate as evaluate } from "ai";
+import { createEvaluator, evaluate, evaluationBytes, EVALUATOR_PROVIDER, EVALUATOR_MODEL } from "./openrouter.ts";
 
 const PROVIDER = "auto";
-const MODEL = "jev";
-const GATEWAY = "vercel-ai-gateway";
+const MODEL = "gpt-auto";
+const GATEWAY = EVALUATOR_PROVIDER;
 const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const EVALUATION_ATTEMPTS = 3;
@@ -33,7 +33,7 @@ const CHUNK_CONCURRENCY = 2;
 class RoutingBudgetError extends Error {}
 
 function fitsEvaluation(state: unknown, questions: unknown) {
-	return Buffer.byteLength(JSON.stringify({ state, questions, providerOptions: {} }), "utf8") <= EVALUATION_BYTES;
+	return evaluationBytes(state, questions) <= EVALUATION_BYTES;
 }
 
 const AUTO_THINKING: Record<ModelThinkingLevel, string> = {
@@ -50,26 +50,8 @@ type ThinkingChoices = Partial<Record<ModelThinkingLevel, string>>;
 type RouteCriteria = { role: string; use_when: string[]; not_for: string[]; boundary: string };
 type RouteOption = { description: string | RouteCriteria; thinking?: ModelThinkingLevel | "auto" | ThinkingChoices; minThinking?: ModelThinkingLevel; adaptiveThinking?: boolean };
 type Config = { options: Record<string, RouteOption>; fallback: string; timeoutMs: number; monitor: boolean; skills: boolean; minThinking?: ModelThinkingLevel };
-const DEFAULT_CONFIG: Config = {
-	options: {
-		"openai-codex/gpt-5.6-luna": {
-			description: "Cheap, fast, capable executor for clear goals and known approaches: bounded implementation, understood fixes, tests, translations, summaries, and routine configuration. Not for architecture, difficult debugging, uncertain root causes, or advisory judgment.",
-			thinking: "max",
-		},
-		"openai-codex/gpt-5.6-sol": {
-			description: "Middle tier for bounded implementation needing investigation, ordinary debugging, local correctness reviews, and integration within established architecture. Not for routine execution Luna can handle, architectural direction, difficult debugging, or high-stakes advice.",
-			thinking: "auto",
-		},
-		"openai-codex/gpt-6-astra": {
-			description: "Highest-intelligence reasoning and advisor for critical thinking, recommendations, architecture, hard debugging, interacting failure modes, security-critical decisions, and complex ambiguity. Not for mechanical execution, simple summaries, or bounded implementation without substantive judgment.",
-			thinking: "xhigh",
-		},
-	},
-	fallback: "openai-codex/gpt-6-astra",
-	timeoutMs: 5000,
-	monitor: true,
-	skills: false,
-};
+// Keep the named profile in the pinned package so machines share one policy.
+const DEFAULT_CONFIG: Config = JSON.parse(readFileSync(new URL("./gpt-auto.json", import.meta.url), "utf8"));
 type Selection = {
 	target: string;
 	thinking: ModelThinkingLevel;
@@ -351,7 +333,7 @@ export default function jevRouter(pi: ExtensionAPI) {
 	if (!isRecord(settings)) throw new Error(`Expected a JSON object in ${settingsPath}.`);
 	const configured = Object.hasOwn(settings, "jevRouter");
 	const config = parseConfig(configured ? settings.jevRouter : DEFAULT_CONFIG);
-	const configSource = configured ? `${settingsPath} (jevRouter)` : "built-in defaults";
+	const configSource = configured ? `${settingsPath} (jevRouter override of gpt-auto)` : "bundled gpt-auto.json profile";
 	let active: ExtensionContext | undefined;
 	let pinned: Pin | undefined;
 	let checkedKey: string | undefined;
@@ -402,8 +384,8 @@ export default function jevRouter(pi: ExtensionAPI) {
 			while (input.messages.length > 1 && !fitsEvaluation({ messages: input.messages }, questions)) input.messages.shift();
 			if (!fitsEvaluation({ messages: input.messages }, questions)) throw new Error("skill evaluation budget exceeded");
 			const auth = await abortable(() => ctx.modelRegistry.getProviderAuth(GATEWAY), signal);
-			if (!auth?.auth.apiKey) throw new Error("missing Gateway key");
-			const model = createGateway({ apiKey: auth.auth.apiKey }).evaluationModel("typesafe-ai/jev");
+			if (!auth?.auth.apiKey) throw new Error("missing OpenRouter key");
+			const model = createEvaluator(ctx.modelRegistry);
 			const result = await abortable(() => evaluate({ model, state: { messages: input.messages }, questions, abortSignal: signal, maxRetries: 0 }), signal);
 			signal.throwIfAborted();
 			const ranked = offered.map((skill, index) => ({ skill, probability: result.answers[String(index)]?.probability }));
@@ -440,14 +422,14 @@ export default function jevRouter(pi: ExtensionAPI) {
 
 	function register(models: Model<Api>[], target?: Model<Api>) {
 		pi.registerProvider(PROVIDER, {
-			name: "Jev model router",
+			name: "GPT Auto router",
 			api: "jev-router",
-			baseUrl: "https://ai-gateway.vercel.sh",
+			baseUrl: "https://openrouter.ai/api/v1",
 			// Local dispatch only. This sentinel is never sent to any provider.
 			apiKey: "local-router",
 			models: [{
 				id: MODEL,
-				name: "Jev auto routing",
+				name: "GPT Auto (Jev via OpenRouter)",
 				reasoning: true,
 				thinkingLevelMap: { xhigh: "xhigh", max: "max" },
 				input: models.some((model) => model.input.includes("image")) ? ["text", "image"] : ["text"],
@@ -503,8 +485,8 @@ export default function jevRouter(pi: ExtensionAPI) {
 				if (profiles.length === 1) thinking = profiles[0].thinking;
 				else {
 					const auth = await abortable(() => ctx.modelRegistry.getProviderAuth(GATEWAY), signal);
-					if (!auth?.auth.apiKey) throw new Error("missing Gateway key");
-					const model = createGateway({ apiKey: auth.auth.apiKey }).evaluationModel("typesafe-ai/jev");
+					if (!auth?.auth.apiKey) throw new Error("missing OpenRouter key");
+					const model = createEvaluator(ctx.modelRegistry);
 					const result = await abortable(() => evaluate({ model, state, questions, abortSignal: signal, maxRetries: 0 }), signal);
 					signal.throwIfAborted();
 					const selected = profiles.find((profile) => profile.thinking === result.answers.effort.choice);
@@ -534,7 +516,7 @@ export default function jevRouter(pi: ExtensionAPI) {
 
 	function showStatus(ctx: ExtensionContext) {
 		ctx.ui.setStatus("jev-router", ctx.model?.provider === PROVIDER && ctx.model.id === MODEL
-			? pinned ? `auto: ${pinned.target} (${effortEntries(ctx).at(-1)?.thinking ?? pinned.thinking}, ${config.options[pinned.target]?.adaptiveThinking ? "adaptive" : "pinned"})` : "auto: Jev (not yet pinned)"
+			? pinned ? `gpt-auto: ${pinned.target} (${effortEntries(ctx).at(-1)?.thinking ?? pinned.thinking}, ${config.options[pinned.target]?.adaptiveThinking ? "adaptive" : "pinned"})` : "gpt-auto: Jev (not yet pinned)"
 			: undefined);
 	}
 
@@ -606,8 +588,8 @@ export default function jevRouter(pi: ExtensionAPI) {
 					metrics.routingChunks = chunks.length;
 				}
 				const auth = await abortable(() => ctx.modelRegistry.getProviderAuth(GATEWAY), signal);
-				if (!auth?.auth.apiKey) throw new Error("missing Gateway key");
-				const model = createGateway({ apiKey: auth.auth.apiKey }).evaluationModel("typesafe-ai/jev");
+				if (!auth?.auth.apiKey) throw new Error("missing OpenRouter key");
+				const model = createEvaluator(ctx.modelRegistry);
 				async function evaluateRequest(state: Parameters<typeof evaluate>[0]["state"]) {
 					if (!fitsEvaluation(state, questions)) throw new RoutingBudgetError("routing request exceeds the evaluation budget");
 					for (let attempt = 1; ; attempt++) {
@@ -659,8 +641,8 @@ export default function jevRouter(pi: ExtensionAPI) {
 				// Never expose SDK error bodies: they may contain conversation text.
 				options.signal?.throwIfAborted();
 				const status = isRecord(error) && typeof error.statusCode === "number" ? error.statusCode : undefined;
-				const reason = status === 401 ? "Gateway rejected credentials (401); update the Gateway key" :
-					status ? `Jev request failed (HTTP ${status})` : "Jev unavailable; check Gateway login/key and connectivity";
+				const reason = status === 401 ? "OpenRouter rejected credentials (401); update the OpenRouter key" :
+					status ? `Jev request failed (HTTP ${status})` : "Jev unavailable; check OpenRouter login/key and connectivity";
 				selection = fallback(error instanceof RoutingBudgetError ? error.message :
 					deadline.aborted || (error instanceof Error && error.name === "TimeoutError") ? "Jev timed out" : reason);
 			} finally {
@@ -696,7 +678,7 @@ export default function jevRouter(pi: ExtensionAPI) {
 			try {
 				options.signal?.throwIfAborted();
 				if (!active) throw new Error("Jev router has no active Pi session.");
-				if (options.deferred) throw new Error("Select a concrete model for deferred generation; auto/jev does not support it.");
+				if (options.deferred) throw new Error("Select a concrete model for deferred generation; auto/gpt-auto does not support it.");
 				const ctx = active;
 				const hasImages = context.messages.some((item) => Array.isArray(item.content) && item.content.some((part) => part.type === "image"));
 				const available = candidates(ctx).filter((candidate) => !hasImages || candidate.input.includes("image"));
@@ -790,16 +772,16 @@ export default function jevRouter(pi: ExtensionAPI) {
 	pi.on("session_tree", (_event, ctx) => { showStatus(ctx); });
 	pi.on("session_shutdown", () => { active = undefined; pinned = undefined; checkedKey = undefined; });
 	pi.registerCommand("jev", {
-		description: "Show the pinned Jev model, current effort, and fork suggestions",
+		description: "Show the GPT Auto profile, pinned model, current effort, and fork suggestions",
 		handler: async (_args, ctx) => {
 			const routes = Object.entries(config.options).map(([ref, route]) => `${ref}: ${typeof route.thinking === "object" ? `auto (${Object.keys(route.thinking).join(", ")})` : route.thinking ?? "inherit Pi thinking"}${route.minThinking ? `, model minimum ${route.minThinking}` : ""}${route.adaptiveThinking ? ", adaptive" : ""}`).join("\n");
-			const gateway = ctx.modelRegistry.getProviderAuthStatus(GATEWAY).configured ? "configured" : "missing: /login vercel-ai-gateway";
+			const gateway = ctx.modelRegistry.getProviderAuthStatus(GATEWAY).configured ? `configured (${EVALUATOR_MODEL})` : "missing: /login openrouter";
 			const pin = pinned ? `${pinned.target}, thinking ${effortEntries(ctx).at(-1)?.thinking ?? pinned.thinking} (initial ${pinned.thinking})` : "not yet selected";
 			const last = lastRoute ? lastRoute.purpose === "monitor" && lastRoute.source === "fallback"
 				? `\nLast monitor failed: ${lastRoute.reason}. Keeping the session pin.`
 				: `\nLast ${lastRoute.purpose}: ${lastRoute.target}, thinking ${lastRoute.thinking} (${lastRoute.source}, ${lastRoute.milliseconds}ms, evaluations: ${lastRoute.evaluationRequests ?? 0}${lastRoute.routingChunks ? `, chunks planned: ${lastRoute.routingChunks}` : ""}, estimated Jev $${lastRoute.estimatedCost.toFixed(6)}${lastRoute.usageIncomplete ? "; usage incomplete" : ""})` : "";
 			const suggestion = lastSuggestion ? `\nFork suggestion: ${lastSuggestion.target}, thinking ${lastSuggestion.thinking}` : "";
-			ctx.ui.notify(`Jev routes:\n${routes}\nGlobal minimum thinking: ${config.minThinking ?? "off"}\nPinned: ${pin}\nMonitor: ${config.monitor ? "on" : "off"}\nSkills: ${config.skills ? "on" : "off"}\nFallback: ${config.fallback}\nGateway: ${gateway}${last}${suggestion}\nConfig: ${configSource}\nEdit jevRouter in ${settingsPath}, then /reload. Model and initial-effort changes apply to new sessions. Astra adaptive policy applies after reload.`, "info");
+			ctx.ui.notify(`GPT Auto (gpt-auto) routes:\n${routes}\nGlobal minimum thinking: ${config.minThinking ?? "off"}\nPinned: ${pin}\nMonitor: ${config.monitor ? "on" : "off"}\nSkills: ${config.skills ? "on" : "off"}\nFallback: ${config.fallback}\nOpenRouter: ${gateway}${last}${suggestion}\nConfig: ${configSource}\nEdit jevRouter in ${settingsPath}, then /reload. Model and initial-effort changes apply to new sessions. Astra adaptive policy applies after reload.`, "info");
 		},
 	});
 }

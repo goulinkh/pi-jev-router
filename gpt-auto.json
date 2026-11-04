@@ -1,0 +1,41 @@
+{
+  "options": {
+    "openai-codex/gpt-6.1-sol": {
+      "description": {
+        "role": "Lower-cost default for routine work and bounded investigation within an established architecture.",
+        "use_when": [
+          "Routine implementation, small or medium changes, tests, and configuration with clear requirements.",
+          "Ordinary debugging and local correctness reviews with a bounded scope.",
+          "Straightforward explanations, summaries, and editing human-facing text without substantial ambiguity."
+        ],
+        "not_for": [
+          "Architectural direction, difficult debugging, security-critical decisions, or interacting failure modes.",
+          "Demanding human-facing writing or recommendations requiring nuanced judgment and synthesis."
+        ],
+        "boundary": "Prefer Sol whenever it adequately covers the task. Higher reasoning effort does not expand its scope; use Astra when substantive judgment or complex ambiguity is central."
+      },
+      "thinking": "auto"
+    },
+    "openai-codex/gpt-6-astra": {
+      "description": {
+        "role": "Higher-cost reasoning and writing model for complex work requiring substantive judgment.",
+        "use_when": [
+          "Architecture, design trade-offs, ambiguous requirements, and high-stakes technical recommendations.",
+          "Difficult debugging, cross-cutting changes, interacting failure modes, and security-critical decisions.",
+          "Demanding human-facing writing, nuanced technical specifications, and synthesis requiring careful judgment."
+        ],
+        "not_for": [
+          "Routine implementation, tests, configuration, or bounded debugging that Sol can handle.",
+          "Simple explanations, summaries, and mechanical prose edits."
+        ],
+        "boundary": "Choose Astra when Sol's scope is insufficient, not merely because the prompt mentions review, planning, or writing."
+      },
+      "thinking": "auto",
+      "adaptiveThinking": false
+    }
+  },
+  "fallback": "openai-codex/gpt-6-astra",
+  "timeoutMs": 5000,
+  "monitor": true,
+  "skills": false
+}
