@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -62,6 +62,7 @@ type Selection = {
 	evaluationRequests?: number;
 	routingChunks?: number;
 	usageIncomplete?: boolean;
+	evidence?: { choice: string; probabilities: Record<string, number>; profiles: unknown[] };
 };
 
 type Pin = Pick<Selection, "target" | "thinking">;
@@ -558,7 +559,7 @@ export default function jevRouter(pi: ExtensionAPI) {
 		const started = Date.now();
 		let selection: Selection;
 		if (profiles.length === 1) {
-			selection = { target: profiles[0].target, thinking: profiles[0].thinking, source: "single" };
+			selection = { target: profiles[0].target, thinking: profiles[0].thinking, source: "single", reason: "Only one eligible model/effort profile is available." };
 		} else if (!messages) {
 			selection = fallback(reason ?? "no user text");
 		} else {
@@ -578,7 +579,7 @@ export default function jevRouter(pi: ExtensionAPI) {
 			const expiresAt = performance.now() + config.timeoutMs * EVALUATION_ATTEMPTS;
 			const deadline = AbortSignal.timeout(config.timeoutMs * EVALUATION_ATTEMPTS);
 			const signal = AbortSignal.any([stop.signal, deadline, ...(options.signal ? [options.signal] : [])]);
-			const metrics = { evaluationRequests: 0, routingChunks: 0, inputTokens: 0, outputTokens: 0, usageIncomplete: false };
+			const metrics = { evaluationRequests: 0, routingChunks: 0, inputTokens: 0, outputTokens: 0, usageIncomplete: false, evaluations: [] as Record<string, unknown>[] };
 			try {
 				while (messages.length > 1 && !fitsEvaluation({ messages }, questions)) messages.shift();
 				let chunks: ReturnType<typeof chunkRoutingText> = [];
@@ -598,6 +599,9 @@ export default function jevRouter(pi: ExtensionAPI) {
 						const timeout = AbortSignal.timeout(config.timeoutMs);
 						const requestSignal = AbortSignal.any([signal, timeout]);
 						metrics.evaluationRequests++;
+						const audit: Record<string, unknown> = { request: metrics.evaluationRequests, attempt, stage: isRecord(state) && typeof state.stage === "string" ? state.stage : "direct", startedAt: new Date().toISOString() };
+						metrics.evaluations.push(audit);
+						const requestStarted = Date.now();
 						try {
 							const result = await abortable(() => evaluate({ model, state, questions, abortSignal: requestSignal, maxRetries: 0 }), requestSignal);
 							for (const field of ["inputTokens", "outputTokens"] as const) {
@@ -605,8 +609,10 @@ export default function jevRouter(pi: ExtensionAPI) {
 								if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) metrics[field] += value;
 								else metrics.usageIncomplete = true;
 							}
+							Object.assign(audit, { status: "ok", milliseconds: Date.now() - requestStarted, answer: result.answers.route, usage: result.usage });
 							return result.answers.route;
 						} catch (error) {
+							Object.assign(audit, { status: requestSignal.aborted ? "aborted-or-timeout" : "error", milliseconds: Date.now() - requestStarted });
 							metrics.usageIncomplete = true;
 							if (timeout.aborted && !signal.aborted && attempt < EVALUATION_ATTEMPTS) continue;
 							throw timeout.aborted ? timeout.reason : error;
@@ -636,7 +642,11 @@ export default function jevRouter(pi: ExtensionAPI) {
 				if (performance.now() >= expiresAt) throw new RoutingBudgetError("Jev timed out");
 				const profile = offered.get(decision.choice);
 				if (!profile) throw new Error("invalid route");
-				selection = { target: profile.target, thinking: profile.thinking, source: "jev" };
+				selection = {
+					target: profile.target, thinking: profile.thinking, source: "jev",
+					reason: pin ? "Jev selected this profile under the keep-current-model monitoring policy; the session pin is unchanged." : "Jev selected this profile using task-fit criteria, then lowest sufficient offered effort.",
+					evidence: { choice: decision.choice, probabilities: decision.probabilities, profiles: [...offered].map(([id, value]) => ({ id, ...value })) },
+				};
 			} catch (error) {
 				// Never expose SDK error bodies: they may contain conversation text.
 				options.signal?.throwIfAborted();
@@ -653,7 +663,14 @@ export default function jevRouter(pi: ExtensionAPI) {
 		options.signal?.throwIfAborted();
 		checkedKey = key;
 		lastRoute = { ...selection, purpose: pin ? "monitor" : "route", milliseconds: Date.now() - started, estimatedCost: (selection.inputTokens ?? 0) * 0.042 / 1_000_000 };
-		pi.appendEntry(pin ? "jev-monitor" : "jev-route", { ...lastRoute, sessionId, key });
+		pi.appendEntry(pin ? "jev-monitor" : "jev-route", {
+			...lastRoute, schemaVersion: 1, decisionId: randomUUID(), timestamp: new Date().toISOString(), sessionId, key,
+			classifier: `${EVALUATOR_PROVIDER}/${EVALUATOR_MODEL}`, policyHash: digest(config),
+			policy: config, eligibleProfiles: profiles,
+			previousPin: pin ?? null,
+			applied: pin ? { target: pin.target, thinking: currentThinking } : null,
+			outcome: pin ? selection.source === "fallback" ? "monitor-failed-keep-pin" : selection.target === pin.target ? "keep-pin" : "recommend-fork" : "selected-pending-auth",
+		});
 		if (pin) {
 			if (selection.source === "jev" && selection.target !== pin.target && !suggestedModels.has(selection.target)) {
 				lastSuggestion = { target: selection.target, thinking: selection.thinking };
@@ -710,9 +727,20 @@ export default function jevRouter(pi: ExtensionAPI) {
 					showStatus(ctx);
 				}
 				const thinking = selection.thinking;
+				const requestId = randomUUID();
+				const payloadHook = onPayload ?? options.onPayload;
 				const downstream = provider.streamSimple(auth.baseUrl ? { ...target, baseUrl: auth.baseUrl } : target, context, {
 					...options,
-					onPayload: onPayload ?? options.onPayload,
+					onPayload: async (payload, concreteModel) => {
+						const replacement = await payloadHook?.(payload, concreteModel);
+						const sent = replacement ?? payload;
+						pi.appendEntry("jev-generation", {
+							schemaVersion: 1, requestId, timestamp: new Date().toISOString(), sessionId: ctx.sessionManager.getSessionId(),
+							target: selection.target, thinking, mainRequest: options.sessionId === ctx.sessionManager.getSessionId(),
+							serviceTier: isRecord(sent) && typeof sent.service_tier === "string" ? sent.service_tier : "unspecified",
+						});
+						return replacement;
+					},
 					// Replace, never merge, the router's credential envelope.
 					apiKey: auth.apiKey, headers: auth.headers, env: auth.env,
 					reasoning: thinking === "off" ? undefined : thinking,

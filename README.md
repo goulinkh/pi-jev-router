@@ -6,6 +6,8 @@ The **gpt-auto** profile uses Jev on OpenRouter to select a Codex model and reas
 
 ## Install on any machine
 
+Remove the separate `npm:@pi-plugins/fast-mode` package entry before installing this version: the router now includes its bridged functionality. Keep `extensions/fast-mode.json` unchanged.
+
 Requires Pi with its native classifier API (`modelRegistry.classify` and `findOfType`; verified on Pi 1.4.0) and Node.js 22.19 or newer.
 
 ```sh
@@ -61,6 +63,20 @@ Routing and monitoring send selected user/assistant text excerpts to **OpenRoute
 Jev evaluations are billed separately. The inherited `/jev` estimate uses $0.042 per million classifier input tokens, matching the catalog price when this fork was created. Failed calls can still be billed. Skill/adaptive evaluations are excluded from that estimate, and routing costs are not included in Pi's footer totals. Cache savings are not guaranteed.
 
 Routing requests have a conservative 28,000-byte budget; long inputs may be chunked. Routing/monitoring operations share a ceiling of three times `timeoutMs` (15 seconds by default). Deferred/background generation is unsupported by this router; select a concrete model for it.
+
+## Routing audit history
+
+Telemetry is automatic; no commands are needed. Ask the coding assistant to inspect custom entries in local Pi session JSONL logs. `telemetry.ts` provides offline readers and summaries.
+
+New `jev-route` and `jev-monitor` custom session entries include a decision UUID, timestamp, policy snapshot/hash, eligible model/effort profiles, classifier identity, final choice and probabilities, per-request outcomes/usage/latency (including retries and chunk evaluations), prior pin, and monitoring outcome. Existing `jev-pin` records confirm the initial selection after authentication. Initial decisions are marked pending authentication; monitoring records distinguish a recommendation from the unchanged pin. These are decisions, not counts of generation calls. Reused pins do not trigger additional decisions.
+
+Jev is a classifier, not an explanation generator: its probabilities and the exact offered routing rubrics are evidence, not a prose rationale or calibrated confidence. The saved reason describes the policy or a sanitized fallback cause. No additional classifier requests are made for observability. Records do not add prompt excerpts, tool output or raw provider errors. They live in Pi's existing session JSONL files and survive reload/resume; retention follows those files. Older decisions cannot recover evidence that was never saved. Skill/adaptive-effort evaluations remain outside these routing totals. Failed calls can be billed without reported usage, so costs are estimates.
+
+Each actual generation payload also records `jev-generation` with the concrete model, effort and outgoing `serviceTier`, including reused pins. This records what was requested, not proof that the server granted priority.
+
+The package includes a bridge around `@pi-plugins/fast-mode@0.1.13`. Do not also install that plugin separately. The bridge preserves its configuration, allowlist, --fast flag and live on/off toggle, but identifies routed Codex requests by the concrete payload model rather than auto/gpt-auto. Jev classifier calls do not receive Codex priority settings. Explicit service tiers are preserved. The upstream status indicator still follows the selected virtual model, so it may appear inactive even while routed priority requests work; telemetry records the outgoing tier.
+
+Run `npm test` with Pi installed for audit and fast-mode integration tests.
 
 ## Maintenance
 

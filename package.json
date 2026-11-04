@@ -22,16 +22,25 @@
   },
   "pi": {
     "extensions": [
+      "./fast-mode.ts",
       "./index.ts"
     ]
   },
+  "scripts": {
+    "test": "node --experimental-strip-types --test telemetry.test.ts && node fast-mode.test.mjs"
+  },
   "files": [
+    "fast-mode.ts",
+    "telemetry.ts",
     "index.ts",
     "openrouter.ts",
     "gpt-auto.json",
     "README.md",
     "LICENSE"
   ],
+  "dependencies": {
+    "@pi-plugins/fast-mode": "0.1.13"
+  },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*"
