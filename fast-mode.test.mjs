@@ -25,16 +25,32 @@ try {
 	bridge({ on: (name, fn) => { events[name] = fn; }, registerFlag() {}, registerCommand: (name, cmd) => { commands[name] = cmd; }, getFlag: () => false });
 	const sol = { provider: "openai-codex", id: "gpt-6.1-sol", api: "openai-codex-responses" };
 	const astra = { ...sol, id: "gpt-6-astra" };
-	const ctx = { hasUI: false, model: { provider: "auto", id: "gpt-auto" }, modelRegistry: { find: (_provider, id) => id === sol.id ? sol : id === astra.id ? astra : undefined }, ui: { notify() {} } };
+	let branch = [];
+	const notifications = [];
+	const ctx = { hasUI: true, model: { provider: "auto", id: "gpt-auto" }, modelRegistry: { find: (_provider, id) => id === sol.id ? sol : id === astra.id ? astra : undefined },
+		sessionManager: { getBranch: () => branch, getSessionId: () => "test-session" },
+		ui: { notify: message => notifications.push(message), setWidget() {} } };
+	const active = () => globalThis[Symbol.for("@pi-plugins/statusline-registry")]?.has("fast-mode") ?? false;
 	await events.session_start({}, ctx);
+	await commands.fast.handler("on", ctx);
+	assert.match(notifications.at(-1), /waiting for a route/);
+	assert.equal(active(), false);
 	const request = (payload, context = ctx) => events.before_provider_request({ payload }, context);
 	assert.equal(request({ model: sol.id }).service_tier, "priority");
+	assert.equal(active(), true); // request-time UI uses the concrete route
 	assert.equal(request({ model: sol.id, service_tier: "flex" }), undefined);
 	assert.equal(request({ model: astra.id }), undefined); // not allowlisted
+	assert.equal(active(), false);
+	branch = [{ type: "custom", customType: "jev-pin", data: { sessionId: "test-session", target: "openai-codex/gpt-6.1-sol" } }];
+	await commands.fast.handler("status", ctx);
+	assert.match(notifications.at(-1), /Fast mode is on for/);
+	assert.doesNotMatch(notifications.at(-1), /inactive|waiting/);
 	assert.equal(request({ model: "typesafe/jev-1.14" }), undefined);
 	await commands.fast.handler("off", ctx);
+	assert.equal(active(), false);
 	assert.equal(request({ model: sol.id }), undefined);
 	await commands.fast.handler("on", ctx);
+	assert.equal(active(), true); // toggling on after routing updates immediately
 	assert.equal(request({ model: sol.id }).service_tier, "priority");
 	assert.equal(request({ model: sol.id }, { ...ctx, model: sol }).service_tier, "priority");
 	console.log("Fast-mode bridge: priority on, off, re-enabled, allowlist, explicit tier, classifier isolation and direct-model tests passed; router import passed.");
